@@ -5,12 +5,11 @@
  * string prefix. See https://en.wikipedia.org/wiki/Radix_tree.
  */
 
-#include <assert.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <assert.h>   /// for `assert`
+#include <stdbool.h>  /// for `bool`, `true`, and `false`
+#include <stdio.h>    /// for `perror` and `puts`
+#include <stdlib.h>   /// for memory allocation, `free`, `exit`, and exit codes
+#include <string.h>   /// for string lengths, comparisons, and memory copying
 
 #define NUM_CHARS 128        ///< Number of supported ASCII characters.
 #define MAX_WORD_LENGTH 999  ///< Maximum word length used while printing.
