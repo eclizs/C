@@ -106,10 +106,6 @@ void radix_insert(Node** root, const char* word)
       int commonLength = commonPrefixLength(word + i, node->prefix);
       i += commonLength; /** i jumps over to the first character that doesn't match node->prefix */
 
-      if (i == wordLength)
-         node->isEndOfWord = true; /** Current node becomes an end of a word if the entire word is
-                                      contained within node->prefix */
-
       if (commonLength < strlen(node->prefix))
       {
          Node* newChild =
@@ -137,6 +133,9 @@ void radix_insert(Node** root, const char* word)
          node->isEndOfWord =
              (i == wordLength); /** if i == wordLength then i is at the end of the word */
       }
+      else if (i == wordLength)
+         node->isEndOfWord = true; /** Current node becomes an end of a word if the entire word is
+                                      contained within node->prefix */
    }
 }
 
@@ -320,26 +319,21 @@ int main()
    RadixTree tree;
    tree.root = NULL;
 
-   // radix_insert(&tree.root, "cart");
-   radix_insert(&tree.root, "carp");
-   // radix_insert(&tree.root, "car");
-   // radix_insert(&tree.root, "came");
+   FILE* fp = fopen("dictionary.txt", "r");
+   if (NULL == fp)
+   {
+      fprintf(stderr, "Error while opening dictionary file");
+      exit(1);
+   }
 
-   // FILE* fp = fopen("dictionary.txt", "r");
-   // if (NULL == fp)
-   // {
-   //    fprintf(stderr, "Error while opening dictionary file");
-   //    exit(1);
-   // }
-
-   // int ret;
-   // char word[100] = {0};
-   // // insert all the words from the dictionary
-   // while (fgets(word, sizeof(word), fp))
-   // {
-   //    word[strcspn(word, "\r\n")] = '\0';  // Remove a line ending if present
-   //    radix_insert(&tree.root, word);
-   // }
+   int ret;
+   char word[100] = {0};
+   // insert all the words from the dictionary
+   while (fgets(word, sizeof(word), fp))
+   {
+      word[strcspn(word, "\r\n")] = '\0';  // Remove a line ending if present
+      radix_insert(&tree.root, word);
+   }
 
    while (1)
    {
