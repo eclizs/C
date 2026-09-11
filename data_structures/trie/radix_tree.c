@@ -1,352 +1,489 @@
+/**
+ * @file
+ * @brief A radix tree for storing and searching ASCII strings.
+ * @details A radix tree compresses chains of single-child trie nodes into one
+ * string prefix. See https://en.wikipedia.org/wiki/Radix_tree.
+ */
+
 #include <assert.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define NUMCHAR 128
-#define MAX_BUFFER_SIZE 1000
+#define NUM_CHARS 128        ///< Number of supported ASCII characters.
+#define MAX_WORD_LENGTH 999  ///< Maximum word length used while printing.
 
+/** @brief A compressed node in a radix tree. */
 typedef struct Node
 {
-   struct Node* child[NUMCHAR];
-   char* prefix;
-   bool isEndOfWord;
+    struct Node *children[NUM_CHARS];  ///< Children indexed by ASCII value.
+    char *prefix;                      ///< Compressed path represented here.
+    bool is_end_of_word;               ///< Whether this path is a stored word.
 } Node;
 
+/** @brief A radix tree and its root node. */
 typedef struct RadixTree
 {
-   Node* root;
+    Node *root;  ///< Empty-prefix root, or `NULL` for an empty tree.
 } RadixTree;
 
 /**
- * Initialize a node with a prefix
+ * @brief Allocates a node containing a copy of a prefix.
+ * @param prefix Null-terminated prefix to copy.
+ * @returns A zero-initialized node.
  */
-Node* createNode(const char* prefix)
+static Node *create_node(const char *prefix)
 {
-   Node* node = calloc(1, sizeof(*node));
+    Node *node = calloc(1, sizeof(*node));
+    if (node == NULL)
+    {
+        perror("calloc");
+        exit(EXIT_FAILURE);
+    }
 
-   // Exit the program if calloc fails
-   if (!node)
-   {
-      perror("calloc");
-      exit(EXIT_FAILURE);
-   }
-
-   node->prefix = strdup(prefix);
-
-   return node;
+    const size_t prefix_length = strlen(prefix);
+    node->prefix = malloc(prefix_length + 1);
+    if (node->prefix == NULL)
+    {
+        perror("malloc");
+        free(node);
+        exit(EXIT_FAILURE);
+    }
+    memcpy(node->prefix, prefix, prefix_length + 1);
+    return node;
 }
 
 /**
- * Helper function to determine the length of common characters between a and b
+ * @brief Finds the number of matching characters at the start of two strings.
+ * @param first First null-terminated string.
+ * @param second Second null-terminated string.
+ * @returns Length of the common prefix.
  */
-int commonPrefixLength(const char* a, const char* b)
+static size_t common_prefix_length(const char *first, const char *second)
 {
-   int length = 0;
-   int lenA = strlen(a);
-   int lenB = strlen(b);
-   while (length < lenA && length < lenB && a[length] == b[length]) length++;
-
-   return length;
+    size_t length = 0;
+    while (first[length] != '\0' && second[length] != '\0' &&
+           first[length] == second[length])
+    {
+        length++;
+    }
+    return length;
 }
 
 /**
- * Return true if every byte in str can be used as an index into child.
+ * @brief Checks whether a string contains only supported ASCII bytes.
+ * @param string String to validate.
+ * @returns `true` when every byte can index the children array.
  */
-bool hasValidCharacters(const char* str)
+static bool has_valid_characters(const char *string)
 {
-   if (str == NULL) return false;
+    if (string == NULL)
+    {
+        return false;
+    }
 
-   const unsigned char* character = (const unsigned char*)str;
-   while (*character != '\0')
-   {
-      if (*character >= NUMCHAR) return false;
-      character++;
-   }
-
-   return true;
+    const unsigned char *character = (const unsigned char *)string;
+    while (*character != '\0')
+    {
+        if (*character >= NUM_CHARS)
+        {
+            return false;
+        }
+        character++;
+    }
+    return true;
 }
 
 /**
- * Insert a word into the tree.
- * Uses a double pointer since the root may be modified.
- * Basically the same as returning a Node pointer and assigning radix_insert to
- * root everytime it is called root = radix_insert(root, word) as opposed to
- * radix_insert(&root, word).
+ * @brief Inserts one nonempty ASCII word into a radix tree.
+ * @param root Address of the tree root. An empty root is created as needed.
+ * @param word Word to insert. Invalid and empty strings are ignored.
  */
-void radix_insert(Node** root, const char* word)
+void radix_insert(Node **root, const char *word)
 {
-   if (root == NULL || !hasValidCharacters(word)) return;
-   // Create a node if root is null
-   if (*root == NULL) *root = createNode("");
+    if (root == NULL || !has_valid_characters(word) || word[0] == '\0')
+    {
+        return;
+    }
+    if (*root == NULL)
+    {
+        *root = create_node("");
+    }
 
-   Node* node = *root;
-   int i = 0;
+    Node *node = *root;
+    size_t offset = 0;
+    const size_t word_length = strlen(word);
 
-   int wordLength = strlen(word);
+    while (offset < word_length)
+    {
+        const unsigned char key = (unsigned char)word[offset];
+        Node *child = node->children[key];
+        if (child == NULL)
+        {
+            child = create_node(word + offset);
+            child->is_end_of_word = true;
+            node->children[key] = child;
+            return;
+        }
 
-   while (i < wordLength)
-   {
-      unsigned char key = (unsigned char)word[i];
-      int childExists = node->child[key] == NULL ? 0 : 1;
+        const size_t child_length = strlen(child->prefix);
+        const size_t common_length =
+            common_prefix_length(word + offset, child->prefix);
 
-      // If the node doesn't have a child at that key, create a new node
-      if (!childExists)
-      {
-         Node* newNode = createNode(word + i);  // prefix starts at the i-th index of the word
-         newNode->isEndOfWord = true;
-         node->child[key] =
-             newNode; /** Make the new node the child of the original node at index key */
-         break;
-      }
+        if (common_length == child_length)
+        {
+            offset += common_length;
+            node = child;
+            if (offset == word_length)
+            {
+                node->is_end_of_word = true;
+            }
+            continue;
+        }
 
-      node = node->child[key];  // Traverse down the tree
+        Node *old_suffix = create_node(child->prefix + common_length);
+        old_suffix->is_end_of_word = child->is_end_of_word;
+        memcpy(old_suffix->children, child->children,
+               sizeof(old_suffix->children));
 
-      int commonLength = commonPrefixLength(word + i, node->prefix);
-      i += commonLength; /** i jumps over to the first character that doesn't match node->prefix */
+        char *shared_prefix = malloc(common_length + 1);
+        if (shared_prefix == NULL)
+        {
+            perror("malloc");
+            exit(EXIT_FAILURE);
+        }
+        memcpy(shared_prefix, child->prefix, common_length);
+        shared_prefix[common_length] = '\0';
+        free(child->prefix);
+        child->prefix = shared_prefix;
+        memset(child->children, 0, sizeof(child->children));
+        child->children[(unsigned char)old_suffix->prefix[0]] = old_suffix;
 
-      if (commonLength < strlen(node->prefix))
-      {
-         Node* newChild =
-             createNode(node->prefix +
-                        commonLength); /** Prefix starts at index commonLength of node->prefix */
-         newChild->isEndOfWord = node->isEndOfWord;
-         /**
-          * Child node follows the original node's isEndOfWord value since
-          * the only change done was branching off into a new leaf
-          */
-
-         for (int j = 0; j < NUMCHAR; j++)
-         {
-            newChild->child[j] = node->child[j];  // Copy every child of node into the new child
-            node->child[j] = NULL;
-         }
-
-         char* temp = node->prefix;
-         node->prefix = strndup(node->prefix, commonLength); /** Slice the prefix from
-                                                                 index 0 until commonLength */
-
-         free(temp);                                  /** Free the old prefix */
-         unsigned char childKey = (unsigned char)newChild->prefix[0];
-         node->child[childKey] = newChild; /** new child becomes the child of node */
-         node->isEndOfWord =
-             (i == wordLength); /** if i == wordLength then i is at the end of the word */
-      }
-      else if (i == wordLength)
-         node->isEndOfWord = true; /** Current node becomes an end of a word if the entire word is
-                                      contained within node->prefix */
-   }
+        offset += common_length;
+        child->is_end_of_word = offset == word_length;
+        if (offset < word_length)
+        {
+            Node *new_suffix = create_node(word + offset);
+            new_suffix->is_end_of_word = true;
+            child->children[(unsigned char)new_suffix->prefix[0]] = new_suffix;
+        }
+        return;
+    }
 }
 
 /**
- * Helper function for print.
- * builds an initial prefix buffer to be at the start of every word printed by
- * print. parameter size is the size of the buffer.
+ * @brief Finds the node containing a requested prefix.
+ * @param root Root of the tree.
+ * @param prefix Prefix to locate.
+ * @param buffer Receives the complete path through the returned node.
+ * @param capacity Number of bytes available in `buffer`.
+ * @returns Matching node, or `NULL` when no match exists or the buffer is too
+ * small.
  */
-Node* getNode(Node* root, const char* prefix, char* buffer)
+static Node *find_prefix_node(Node *root, const char *prefix, char *buffer,
+                              size_t capacity)
 {
-   if (root == NULL || buffer == NULL || !hasValidCharacters(prefix)) return NULL;
+    if (root == NULL || buffer == NULL || capacity == 0 ||
+        !has_valid_characters(prefix))
+    {
+        return NULL;
+    }
 
-   Node* node = root;
+    Node *node = root;
+    size_t offset = 0;
+    const size_t prefix_length = strlen(prefix);
+    buffer[0] = '\0';
 
-   int i = 0;
-   int prefixLength = strlen(prefix);
+    while (offset < prefix_length)
+    {
+        const unsigned char key = (unsigned char)prefix[offset];
+        Node *child = node->children[key];
+        if (child == NULL)
+        {
+            return NULL;
+        }
 
-   while (i < prefixLength)
-   {
-      // Get the child that shares the same character as the first character of the remaining prefix
-      unsigned char key = (unsigned char)prefix[i];
-      Node* child = node->child[key];
+        const size_t child_length = strlen(child->prefix);
+        if (child_length >= capacity - offset)
+        {
+            return NULL;
+        }
 
-      if (!child) return NULL;
+        const size_t common_length =
+            common_prefix_length(prefix + offset, child->prefix);
+        const size_t remaining_length = prefix_length - offset;
+        if (common_length != remaining_length &&
+            common_length != child_length)
+        {
+            return NULL;
+        }
 
-      int childPrefixLength = strlen(child->prefix);
-      if (childPrefixLength >= MAX_BUFFER_SIZE - i)
-         return NULL;  // Prevent buffer overflow by exiting early
+        memcpy(buffer + offset, child->prefix, child_length + 1);
+        if (common_length == remaining_length)
+        {
+            return child;
+        }
 
-      // Append the child's prefix to the buffer
-      memcpy(buffer + i, child->prefix, childPrefixLength);
-      buffer[i + childPrefixLength] = '\0';
-
-      int commonLength = commonPrefixLength(prefix + i, child->prefix);
-      int remainingLength = prefixLength - i;
-
-      if (commonLength == remainingLength)
-         return child;  // Child node already represents the entire prefix so return the child
-      if (commonLength != childPrefixLength)
-         return NULL;  // Otherwise the prefix doesn't match anything so return NULL
-
-      node = child;       // Traverse down to the child node
-      i += commonLength;  // i jumps over to the first character that doesn't match child->prefix
-   }
-
-   return node;
+        node = child;
+        offset += child_length;
+    }
+    return node;
 }
 
 /**
- * Recursive print function.
- * length is the length of the current buffer
+ * @brief Checks whether an exact word is stored in the tree.
+ * @param root Root of the tree.
+ * @param word Word to search for.
+ * @returns `true` only when `word` has been inserted and not deleted.
  */
-void radix_print_rec(Node* node, char* buffer, int length)
+bool radix_search(Node *root, const char *word)
 {
-   if (node == NULL || length >= MAX_BUFFER_SIZE) return;
-   if (node->isEndOfWord)
-   {
-      buffer[length] = '\0';  // Null-terminate the string
-      printf("%s\n", buffer);
-   }
+    if (root == NULL || !has_valid_characters(word) || word[0] == '\0')
+    {
+        return false;
+    }
 
-   for (int i = 0; i < NUMCHAR; i++)
-   {
-      if (node->child[i] != NULL)
-      {
-         int prefixLength = strlen(node->child[i]->prefix);
-         memcpy(buffer + length, node->child[i]->prefix,
-                prefixLength);  // Copy the child's prefix into buffer at index length
-         radix_print_rec(node->child[i], buffer,
-                         length + prefixLength);  // Recursively go down the tree
-      }
-   }
+    Node *node = root;
+    size_t offset = 0;
+    const size_t word_length = strlen(word);
+    while (offset < word_length)
+    {
+        node = node->children[(unsigned char)word[offset]];
+        if (node == NULL)
+        {
+            return false;
+        }
+
+        const size_t node_length = strlen(node->prefix);
+        if (common_prefix_length(word + offset, node->prefix) != node_length)
+        {
+            return false;
+        }
+        offset += node_length;
+    }
+    return offset == word_length && node->is_end_of_word;
 }
 
 /**
- * Wrapper function for printing out words starting with prefix
+ * @brief Recursively prints every word below a node.
+ * @param node Current node.
+ * @param buffer Buffer containing the current complete path.
+ * @param length Current path length.
+ * @param capacity Number of bytes in `buffer`.
  */
-void radix_print(Node* root, const char* prefix)
+static void radix_print_recursive(Node *node, char *buffer, size_t length,
+                                  size_t capacity)
 {
-   char buffer[MAX_BUFFER_SIZE] = {0};  // Initialize buffer to '\0'
+    if (node == NULL)
+    {
+        return;
+    }
+    if (node->is_end_of_word)
+    {
+        buffer[length] = '\0';
+        puts(buffer);
+    }
 
-   Node* node = getNode(root, prefix, buffer); /** Finds the node that shares its prefix with the
-                                                  prefix provided by the function */
+    for (size_t i = 0; i < NUM_CHARS; i++)
+    {
+        Node *child = node->children[i];
+        if (child == NULL)
+        {
+            continue;
+        }
 
-   if (node == NULL)
-   {
-      printf("No matches found\n");
-      return;
-   }
-
-   int prefixLength = strlen(buffer);
-
-   radix_print_rec(node, buffer, prefixLength);
-}
-
-/* Helper function for radix_delete.
- * Determine if a node is a leaf or a parent (has children).
- */
-bool nodeHasChildren(Node* node)
-{
-   if (node == NULL) return false;
-
-   for (int i = 0; i < NUMCHAR; i++)
-   {
-      if (node->child[i] != NULL) return true;  // Node has a child, so return true
-   }
-   return false;
+        const size_t prefix_length = strlen(child->prefix);
+        if (prefix_length >= capacity - length)
+        {
+            continue;
+        }
+        memcpy(buffer + length, child->prefix, prefix_length + 1);
+        radix_print_recursive(child, buffer, length + prefix_length, capacity);
+    }
 }
 
 /**
- * Recursive delete function.
- * boolean pointer is for efficiency; deleting a node requires checking
- * if it has children, which takes O(NUMCHAR) time. By marking if a
- * deletion has occurred or not we can skip calling node_has_children
- * unnecessarily
+ * @brief Prints every stored word beginning with a prefix in ASCII order.
+ * @param root Root of the tree.
+ * @param prefix Prefix used to select words.
  */
-Node* radix_delete_rec(Node* node, char* word, bool* deleted)
+void radix_print(Node *root, const char *prefix)
 {
-   if (node == NULL) return node;
-
-   int nodePrefixLength = strlen(node->prefix);
-   if (strlen(word) < nodePrefixLength || strncmp(node->prefix, word, nodePrefixLength) != 0)
-   {
-      /** First condition checks if the word is shorter than node->prefix,
-       * and the second condition actually makes sure that word and node->prefix
-       * are the same if they happen to be the same length */
-      return node;
-   }
-
-   word += nodePrefixLength;  // Increment pointer by the length of node->prefix
-
-   if (*word == '\0')
-   {
-      if (node->isEndOfWord)
-      {
-         node->isEndOfWord = false; /** If the node actually contains a word then delete it by
-                                       marking it as not a word */
-         *deleted = true;           /** Mark that a deletion has occurred */
-
-         if (!nodeHasChildren(node))
-         {
-            // If the node is a leaf then deleting it immediately is possible
-            free(node->prefix);
-            free(node);
-            node = NULL;
-         }
-      }
-      return node;
-   }
-
-   unsigned char index = (unsigned char)word[0];
-
-   node->child[index] = radix_delete_rec(node->child[index], word, deleted);  // Recursively go down the tree
-
-   if (*deleted && !nodeHasChildren(node) && !node->isEndOfWord)
-   {
-      /**
-       * If a deletion has occurred then we need to check if the node is a leaf and
-       * not the end of a word
-       */
-      free(node->prefix);
-      free(node);
-      node = NULL;
-   }
-   return node;
+    char buffer[MAX_WORD_LENGTH + 1];
+    Node *node = find_prefix_node(root, prefix, buffer, sizeof(buffer));
+    if (node == NULL)
+    {
+        puts("No matches found");
+        return;
+    }
+    radix_print_recursive(node, buffer, strlen(buffer), sizeof(buffer));
 }
 
-// Wrapper function for radix_delete
-bool radix_delete(Node** root, char* word)
+/**
+ * @brief Checks whether a node has at least one child.
+ * @param node Node to inspect.
+ * @returns `true` when the node has a child.
+ */
+static bool node_has_children(const Node *node)
 {
-   if (root == NULL || *root == NULL || !hasValidCharacters(word) || strlen(word) == 0) return false;
-
-   bool result = false;
-
-   *root = radix_delete_rec(*root, word, &result);
-   return result;
+    if (node == NULL)
+    {
+        return false;
+    }
+    for (size_t i = 0; i < NUM_CHARS; i++)
+    {
+        if (node->children[i] != NULL)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
-int main()
+/**
+ * @brief Recursively removes a word and prunes empty nodes.
+ * @param node Current node.
+ * @param word Unmatched suffix of the word.
+ * @param deleted Receives whether a stored word was removed.
+ * @returns The current node, or `NULL` when it was pruned.
+ */
+static Node *radix_delete_recursive(Node *node, const char *word,
+                                    bool *deleted)
 {
-   RadixTree tree;
-   tree.root = NULL;
+    if (node == NULL)
+    {
+        return NULL;
+    }
 
-   FILE* fp = fopen("dictionary.txt", "r");
-   if (NULL == fp)
-   {
-      fprintf(stderr, "Error while opening dictionary file");
-      exit(1);
-   }
+    const size_t node_prefix_length = strlen(node->prefix);
+    if (strlen(word) < node_prefix_length ||
+        strncmp(node->prefix, word, node_prefix_length) != 0)
+    {
+        return node;
+    }
+    word += node_prefix_length;
 
-   int ret;
-   char word[100] = {0};
-   // insert all the words from the dictionary
-   while (fgets(word, sizeof(word), fp))
-   {
-      word[strcspn(word, "\r\n")] = '\0';  // Remove a line ending if present
-      radix_insert(&tree.root, word);
-   }
+    if (*word == '\0')
+    {
+        if (node->is_end_of_word)
+        {
+            node->is_end_of_word = false;
+            *deleted = true;
+        }
+    }
+    else
+    {
+        const unsigned char index = (unsigned char)word[0];
+        node->children[index] =
+            radix_delete_recursive(node->children[index], word, deleted);
+    }
 
-   while (1)
-   {
-      char word[100] = {0};
-      printf("Enter keyword: ");
-      if (1 != scanf("%99s", word))
-      {
-         break;
-      }
+    if (*deleted && !node->is_end_of_word && !node_has_children(node))
+    {
+        free(node->prefix);
+        free(node);
+        return NULL;
+    }
+    return node;
+}
 
-      radix_print(tree.root, word);
-      radix_delete(&tree.root, word);
-   }
+/**
+ * @brief Deletes one exact word from a radix tree.
+ * @param root Address of the tree root.
+ * @param word Word to delete.
+ * @returns `true` when the word existed and was deleted.
+ */
+bool radix_delete(Node **root, const char *word)
+{
+    if (root == NULL || *root == NULL || !has_valid_characters(word) ||
+        word[0] == '\0')
+    {
+        return false;
+    }
 
-   return 0;
+    bool deleted = false;
+    *root = radix_delete_recursive(*root, word, &deleted);
+    return deleted;
+}
+
+/**
+ * @brief Releases a complete radix tree.
+ * @param node Root of the subtree to release.
+ */
+static void free_tree(Node *node)
+{
+    if (node == NULL)
+    {
+        return;
+    }
+    for (size_t i = 0; i < NUM_CHARS; i++)
+    {
+        free_tree(node->children[i]);
+    }
+    free(node->prefix);
+    free(node);
+}
+
+/** @brief Runs insertion, search, prefix, validation, and deletion tests. */
+static void test(void)
+{
+    RadixTree tree = {NULL};
+    const char *words[] = {"romane", "romanus", "romulus", "rubens",
+                           "ruber",  "rubicon", "rubicundus"};
+    const size_t word_count = sizeof(words) / sizeof(words[0]);
+
+    for (size_t i = 0; i < word_count; i++)
+    {
+        radix_insert(&tree.root, words[i]);
+        assert(radix_search(tree.root, words[i]));
+    }
+    assert(!radix_search(tree.root, "roman"));
+    assert(!radix_search(tree.root, "rubicund"));
+    assert(!radix_search(tree.root, "unknown"));
+
+    /* Verify insertion of a word ending at an existing internal node. */
+    radix_insert(&tree.root, "rom");
+    assert(radix_search(tree.root, "rom"));
+    assert(radix_search(tree.root, "romane"));
+    radix_insert(&tree.root, "rom");
+    assert(radix_search(tree.root, "rom"));
+
+    char prefix_buffer[MAX_WORD_LENGTH + 1];
+    (void)prefix_buffer;
+    assert(find_prefix_node(tree.root, "rubi", prefix_buffer,
+                            sizeof(prefix_buffer)) != NULL);
+    assert(strncmp(prefix_buffer, "rubi", 4) == 0);
+    assert(find_prefix_node(tree.root, "xyz", prefix_buffer,
+                            sizeof(prefix_buffer)) == NULL);
+
+    assert(!radix_delete(&tree.root, "rubicund"));
+    assert(radix_search(tree.root, "rubicundus"));
+    assert(radix_delete(&tree.root, "romulus"));
+    assert(!radix_search(tree.root, "romulus"));
+    assert(radix_search(tree.root, "romane"));
+    assert(radix_delete(&tree.root, "rom"));
+    assert(!radix_search(tree.root, "rom"));
+    assert(radix_search(tree.root, "romane"));
+
+    const char invalid_word[] = {(char)0x80, '\0'};
+    radix_insert(&tree.root, invalid_word);
+    assert(!radix_search(tree.root, invalid_word));
+    assert(!radix_delete(&tree.root, invalid_word));
+
+    puts("Words beginning with \"rubi\":");
+    radix_print(tree.root, "rubi");
+    free_tree(tree.root);
+    puts("All tests have successfully passed!");
+}
+
+/**
+ * @brief Runs the radix tree self-tests.
+ * @returns `0` after all tests pass.
+ */
+int main(void)
+{
+    test();
+    return 0;
 }
