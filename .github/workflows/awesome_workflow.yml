@@ -58,7 +58,7 @@ jobs:
         with:
           submodules: true
       - run: |
-          cmake -B ./build -S . -DCMAKE_POLICY_VERSION_MINIMUM=3.5.0
+          cmake -B ./build -S .
           cmake --build build --config Release
       - name: Label on PR fail
         uses: actions/github-script@v6
